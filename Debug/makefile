@@ -60,8 +60,8 @@ all: main-build
 main-build: PartialPowerConverter.elf secondary-outputs
 
 # Tool invocations
-PartialPowerConverter.elf PartialPowerConverter.map: $(OBJS) $(USER_OBJS) C:\Users\caiom\Downloads\PartialPowerConverter\STM32G474CBTX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "PartialPowerConverter.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"C:\Users\caiom\Downloads\PartialPowerConverter\STM32G474CBTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="PartialPowerConverter.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+PartialPowerConverter.elf PartialPowerConverter.map: $(OBJS) $(USER_OBJS) C:\Users\caiom\Downloads\ParcialPowerConverter\STM32G474CBTX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "PartialPowerConverter.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"C:\Users\caiom\Downloads\ParcialPowerConverter\STM32G474CBTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="PartialPowerConverter.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 

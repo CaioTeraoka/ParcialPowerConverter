@@ -18,14 +18,29 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "PID.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+typedef enum
+{
+	IDLE,
+	RAMP,
+	CHARGING,
+	DISCHARGING,
+	ERROR_PPC
+} States;
+
+typedef struct
+{
+	float Vbat;
+	float Vbus;
+	float Ibus;
+	float Ibat;
+} Measures;
 
 /* USER CODE END PTD */
 
@@ -33,7 +48,19 @@
 /* USER CODE BEGIN PD */
 #define VREFINT_CAL_ADDR   ((uint16_t*) ((uint32_t)0x1FFF75AA))
 #define Vref_CAL *VREFINT_CAL_ADDR
-#define FILTER_ALPHA 0.05f
+
+
+#define TIME_STEP 0.0001
+#define MAX_PHASE 8320
+#define MIN_PHASE 8320
+
+#define VBAT_MAX 14
+#define VBAT_MIN 10
+#define IBAT_MAX 3
+#define VBUS_MAX 28
+#define IBUS_MAX 3
+
+#define VBUS_SETPOINT 16
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -56,27 +83,23 @@ TIM_HandleTypeDef htim2;
 UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
-uint16_t AD_RES_BUFFER[4];
+uint16_t AD_RES_BUFFER[5];
 uint16_t AD_RES_REF[2];
-float Vbat = 0;
-float Vbus = 0;
-float Ibus = 0;
-float Ibat = 0;
+Measures meas;
 float Vref = 0;
 float Vref1 = 0;
 float Vref2 = 0;
-
-float Vbat_filtrado = 0.0f;
-float Ibat_filtrado = 0.0f;
-
-int i = 0;
 
 /*Internal phase shift */
 uint32_t phi1_inter;
 /*External phase shift to control power flow direction*/
 uint32_t phi2_ext;
-/*Operating frequency 200kHz*/
+/*Operating frequency 50kHz*/
 uint32_t Period=33280;
+
+PID pid = {1, 1, 0, 0, 0, TIME_STEP, MAX_PHASE, MIN_PHASE, 0, 0, 0, 0, 0};
+
+static States currentState = IDLE;
 
 /* USER CODE END PV */
 
@@ -91,7 +114,11 @@ static void MX_HRTIM1_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_TIM2_Init(void);
 /* USER CODE BEGIN PFP */
-
+void Error_PPC();
+void changeState(States newState);
+void enterRamp();
+void enterCharging();
+void enterDischarging();
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -138,34 +165,45 @@ int main(void)
   /* USER CODE BEGIN 2 */
   HAL_TIM_Base_Start(&htim2);
 
+
   HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
   HAL_ADCEx_Calibration_Start(&hadc2, ADC_SINGLE_ENDED);
 
-  HAL_ADC_Start_DMA(&hadc1, (uint32_t*)AD_RES_BUFFER, 4);
+  HAL_ADC_Start_DMA(&hadc1, (uint32_t*)AD_RES_BUFFER, 5);
   HAL_ADC_Start_DMA(&hadc2, (uint32_t*)AD_RES_REF, 2);
 
-  HAL_SYSCFG_VREFBUF_VoltageScalingConfig(SYSCFG_VREFBUF_VOLTAGE_SCALE2);
-  HAL_SYSCFG_EnableVREFBUF();
-  HAL_SYSCFG_VREFBUF_HighImpedanceConfig(SYSCFG_VREFBUF_HIGH_IMPEDANCE_DISABLE);
-
   /*Init timers counter period to run the PWMs at a frequency of 50kHz*/
-__HAL_HRTIM_SETPERIOD(&hhrtim1, HRTIM_TIMERINDEX_MASTER, Period);
-__HAL_HRTIM_SETPERIOD(&hhrtim1, HRTIM_TIMERINDEX_TIMER_A, Period);
-__HAL_HRTIM_SETPERIOD(&hhrtim1, HRTIM_TIMERINDEX_TIMER_B, Period);
+	__HAL_HRTIM_SETPERIOD(&hhrtim1, HRTIM_TIMERINDEX_MASTER, Period);
+	__HAL_HRTIM_SETPERIOD(&hhrtim1, HRTIM_TIMERINDEX_TIMER_A, Period);
+	__HAL_HRTIM_SETPERIOD(&hhrtim1, HRTIM_TIMERINDEX_TIMER_B, Period);
 
-__HAL_HRTIM_SETCOMPARE( &hhrtim1, HRTIM_TIMERINDEX_MASTER, HRTIM_COMPAREUNIT_1, 16640);
+	__HAL_HRTIM_SETCOMPARE( &hhrtim1, HRTIM_TIMERINDEX_MASTER, HRTIM_COMPAREUNIT_1, 16640);
 
-__HAL_HRTIM_SETCOMPARE( &hhrtim1, HRTIM_TIMERINDEX_MASTER, HRTIM_COMPAREUNIT_2, 8320);
+	__HAL_HRTIM_SETCOMPARE( &hhrtim1, HRTIM_TIMERINDEX_MASTER, HRTIM_COMPAREUNIT_2, 8320);
 
-/* Start HRTIM counter and enable PWMs on PA8/PA9/PA10/PA11/PB12/PB13/PB14/PB15*/
-HAL_HRTIM_WaveformCountStart(&hhrtim1,HRTIM_TIMERID_MASTER|HRTIM_TIMERID_TIMER_A|HRTIM_TIMERID_TIMER_B);
-HAL_HRTIM_WaveformOutputStart(&hhrtim1, HRTIM_OUTPUT_TA1 | HRTIM_OUTPUT_TA2|HRTIM_OUTPUT_TB1 | HRTIM_OUTPUT_TB2);
+	/* Start HRTIM counter and enable PWMs on PA8/PA9/PA10/PA11/PB12/PB13/PB14/PB15*/
+	HAL_HRTIM_WaveformCountStart(&hhrtim1,HRTIM_TIMERID_MASTER|HRTIM_TIMERID_TIMER_A|HRTIM_TIMERID_TIMER_B);
+	HAL_HRTIM_WaveformOutputStart(&hhrtim1, HRTIM_OUTPUT_TA1 | HRTIM_OUTPUT_TA2|HRTIM_OUTPUT_TB1 | HRTIM_OUTPUT_TB2);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+	  switch(currentState)
+	  {
+	  	  case IDLE:
+	  		  break;
+	  	  case RAMP:
+	  		  break;
+	  	  case CHARGING:
+	  		  break;
+	  	  case DISCHARGING:
+	  		  break;
+	  	  default:
+	  		  break;
+	  }
+	  HAL_Delay(100);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -758,14 +796,26 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 	   float IBAT_F = (float)AD_RES_BUFFER[0];
 	   float IBUS_F = (float)AD_RES_BUFFER[2];
 
-	   Vbat = VBAT_F/4096 * 5 * Vref; // RAW/2^12 * 3.3 * 5
-	   Vbus = VBUS_F/4096 * 11 * Vref; // RAW/2^12 * 3.3 * 11
-	   Ibat = ((IBAT_F/4096 * Vref) - Vref1)*2; // RAW/2^12 * 3.3 * 5
-	   Ibus = ((IBUS_F/4096 * Vref) - Vref2)*2; // RAW/2^12 * 3.3 * 5
+	   meas.Vbat = VBAT_F/4096 * 5 * Vref; // RAW/2^12 * 3.3 * 5
+	   meas.Vbus = VBUS_F/4096 * 11 * Vref; // RAW/2^12 * 3.3 * 11
+	   meas.Ibat = ((IBAT_F/4096 * Vref) - Vref1)*2; // ((RAW/2^12 * 3.3) - 1.67) / (0.005 * 100)
+	   meas.Ibus = ((IBUS_F/4096 * Vref) - Vref2)*2; // ((RAW/2^12 * 3.3) - 1.67) / (0.005 * 100)
 
-	   // 2. Aplica a Média Móvel Exponencial
-	  Vbat_filtrado = (FILTER_ALPHA * Vbat) + ((1.0f - FILTER_ALPHA) * Vbat_filtrado);
-	  Ibat_filtrado = (FILTER_ALPHA * Ibat) + ((1.0f - FILTER_ALPHA) * Ibat_filtrado);
+		if(meas.Vbat > VBAT_MAX || meas.Vbat < VBAT_MIN ||\
+				meas.Ibat > IBAT_MAX ||\
+				meas.Vbus > VBUS_MAX ||\
+				meas.Ibus > IBUS_MAX)
+		{
+			changeState(ERROR_PPC);
+		}
+		else
+		{
+			float phase_f = PID_Step(&pid, meas.Vbus, VBUS_SETPOINT);
+			int phase_i = (int) phase_f;
+			__HAL_HRTIM_SETCOMPARE( &hhrtim1, HRTIM_TIMERINDEX_MASTER, HRTIM_COMPAREUNIT_2, 8320 + phase_i);
+
+		}
+
    }
    else if (hadc == &hadc2)
    {
@@ -775,6 +825,61 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 	   Vref2 = VREF2_F/4096 * Vref;
    }
 }
+
+void changeState(States newState)
+{
+	if(newState == currentState){
+		return;
+	}
+
+	//Update currentState value
+	currentState = newState;
+
+	switch(currentState)
+	{
+	  case IDLE:
+		  break;
+	  case RAMP:
+		  enterRamp();
+		  break;
+	  case CHARGING:
+		  enterCharging();
+		  break;
+	  case DISCHARGING:
+		  enterDischarging();
+		  break;
+	  case ERROR_PPC:
+		  Error_PPC();
+		  break;
+	  default:
+		  break;
+	}
+}
+
+void enterRamp()
+{
+
+}
+
+void enterCharging()
+{
+
+}
+
+void enterDischarging()
+{
+
+}
+
+void Error_PPC()
+{
+	while(1)
+	{
+		HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
+		HAL_Delay(300);
+	}
+}
+
 /* USER CODE END 4 */
 
 /**
