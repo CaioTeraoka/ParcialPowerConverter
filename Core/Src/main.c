@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "PID.h"
@@ -42,6 +43,13 @@ typedef struct
 	float Ibat;
 } Measures;
 
+
+typedef union
+{
+    float f;
+    uint8_t b[4];
+} FloatBytes;
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -50,17 +58,15 @@ typedef struct
 #define Vref_CAL *VREFINT_CAL_ADDR
 
 
-#define TIME_STEP 0.0001
-#define MAX_PHASE 8320
-#define MIN_PHASE 8320
+const int16_t MAX_PHASE = 8320;
+const int16_t MIN_PHASE = -8320;
 
-#define VBAT_MAX 14
-#define VBAT_MIN 10
-#define IBAT_MAX 3
-#define VBUS_MAX 28
-#define IBUS_MAX 3
+const float VBAT_MAX = 14;
+const float VBAT_MIN = 10;
+const float IBAT_MAX = 3;
+const float VBUS_MAX = 28.8;
+const float IBUS_MAX = 3;
 
-#define VBUS_SETPOINT 16
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -85,21 +91,23 @@ UART_HandleTypeDef huart1;
 /* USER CODE BEGIN PV */
 uint16_t AD_RES_BUFFER[5];
 uint16_t AD_RES_REF[2];
-Measures meas;
 float Vref = 0;
 float Vref1 = 0;
 float Vref2 = 0;
+float phase_f;
+int phase_i;
+float Vbus_Setpoint = 18;
+int vbatStable =  0;
 
-/*Internal phase shift */
-uint32_t phi1_inter;
-/*External phase shift to control power flow direction*/
-uint32_t phi2_ext;
-/*Operating frequency 50kHz*/
-uint32_t Period=33280;
-
-PID pid = {1, 1, 0, 0, 0, TIME_STEP, MAX_PHASE, MIN_PHASE, 0, 0, 0, 0, 0};
+Measures meas;
+PID pid = {100, 500, 0, 0, 0, 0.0001, MAX_PHASE, MIN_PHASE, 0, 0, 0, 0, 0};
 
 static States currentState = IDLE;
+
+FDCAN_TxHeaderTypeDef   TxHeader;
+FDCAN_RxHeaderTypeDef   RxHeader;
+uint8_t TxData[4];
+uint8_t RxData[12];
 
 /* USER CODE END PV */
 
@@ -119,6 +127,7 @@ void changeState(States newState);
 void enterRamp();
 void enterCharging();
 void enterDischarging();
+static void FDCAN_Config();
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -163,27 +172,31 @@ int main(void)
   MX_USART1_UART_Init();
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
-  HAL_TIM_Base_Start(&htim2);
+
+  	//Initiate FDCAN communication
+	FDCAN_Config();
+
+	//Start TIM2 that will trigger ADC
+	HAL_TIM_Base_Start(&htim2);
+
+	//ADC calibration function
+	HAL_ADCEx_Calibration_Start(&hadc2, ADC_SINGLE_ENDED);
+	HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
+
+	//Starts DMA for ADC conversions
+	HAL_ADC_Start_DMA(&hadc2, (uint32_t*)AD_RES_REF, 2);
+	HAL_ADC_Start_DMA(&hadc1, (uint32_t*)AD_RES_BUFFER, 5);
 
 
-  HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
-  HAL_ADCEx_Calibration_Start(&hadc2, ADC_SINGLE_ENDED);
+  	  //Init timers counter period to run the PWMs at a frequency of 50kHz
+	__HAL_HRTIM_SETPERIOD(&hhrtim1, HRTIM_TIMERINDEX_MASTER, 33280);
+	__HAL_HRTIM_SETPERIOD(&hhrtim1, HRTIM_TIMERINDEX_TIMER_A, 33280);
+	__HAL_HRTIM_SETPERIOD(&hhrtim1, HRTIM_TIMERINDEX_TIMER_B, 33280);
 
-  HAL_ADC_Start_DMA(&hadc1, (uint32_t*)AD_RES_BUFFER, 5);
-  HAL_ADC_Start_DMA(&hadc2, (uint32_t*)AD_RES_REF, 2);
-
-  /*Init timers counter period to run the PWMs at a frequency of 50kHz*/
-	__HAL_HRTIM_SETPERIOD(&hhrtim1, HRTIM_TIMERINDEX_MASTER, Period);
-	__HAL_HRTIM_SETPERIOD(&hhrtim1, HRTIM_TIMERINDEX_TIMER_A, Period);
-	__HAL_HRTIM_SETPERIOD(&hhrtim1, HRTIM_TIMERINDEX_TIMER_B, Period);
-
-	__HAL_HRTIM_SETCOMPARE( &hhrtim1, HRTIM_TIMERINDEX_MASTER, HRTIM_COMPAREUNIT_1, 16640);
-
+	//Set compare values for PWM
+	__HAL_HRTIM_SETCOMPARE( &hhrtim1, HRTIM_TIMERINDEX_MASTER, HRTIM_COMPAREUNIT_1, 8320);
 	__HAL_HRTIM_SETCOMPARE( &hhrtim1, HRTIM_TIMERINDEX_MASTER, HRTIM_COMPAREUNIT_2, 8320);
 
-	/* Start HRTIM counter and enable PWMs on PA8/PA9/PA10/PA11/PB12/PB13/PB14/PB15*/
-	HAL_HRTIM_WaveformCountStart(&hhrtim1,HRTIM_TIMERID_MASTER|HRTIM_TIMERID_TIMER_A|HRTIM_TIMERID_TIMER_B);
-	HAL_HRTIM_WaveformOutputStart(&hhrtim1, HRTIM_OUTPUT_TA1 | HRTIM_OUTPUT_TA2|HRTIM_OUTPUT_TB1 | HRTIM_OUTPUT_TB2);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -193,8 +206,25 @@ int main(void)
 	  switch(currentState)
 	  {
 	  	  case IDLE:
+	  		  if(meas.Vbat < VBAT_MAX && meas.Vbat > VBAT_MIN)
+	  		  {
+	  			  ++vbatStable;
+	  		  }
+	  		  if(vbatStable >= 25)
+	  		  {
+	  			  changeState(RAMP);
+	  		  }
 	  		  break;
 	  	  case RAMP:
+	  		  if(Vbus_Setpoint < 28)
+	  		  {
+	  			Vbus_Setpoint += 0.1;
+	  		  }
+	  		  else
+	  		  {
+	  			  if(meas.Ibat < 0) changeState(DISCHARGING);
+	  			  else changeState(CHARGING);
+	  		  }
 	  		  break;
 	  	  case CHARGING:
 	  		  break;
@@ -451,15 +481,15 @@ static void MX_FDCAN2_Init(void)
   hfdcan2.Init.AutoRetransmission = DISABLE;
   hfdcan2.Init.TransmitPause = DISABLE;
   hfdcan2.Init.ProtocolException = DISABLE;
-  hfdcan2.Init.NominalPrescaler = 16;
+  hfdcan2.Init.NominalPrescaler = 52;
   hfdcan2.Init.NominalSyncJumpWidth = 1;
-  hfdcan2.Init.NominalTimeSeg1 = 1;
+  hfdcan2.Init.NominalTimeSeg1 = 2;
   hfdcan2.Init.NominalTimeSeg2 = 1;
   hfdcan2.Init.DataPrescaler = 1;
   hfdcan2.Init.DataSyncJumpWidth = 1;
   hfdcan2.Init.DataTimeSeg1 = 1;
   hfdcan2.Init.DataTimeSeg2 = 1;
-  hfdcan2.Init.StdFiltersNbr = 0;
+  hfdcan2.Init.StdFiltersNbr = 1;
   hfdcan2.Init.ExtFiltersNbr = 0;
   hfdcan2.Init.TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
   if (HAL_FDCAN_Init(&hfdcan2) != HAL_OK)
@@ -577,11 +607,11 @@ static void MX_HRTIM1_Init(void)
     Error_Handler();
   }
   pDeadTimeCfg.Prescaler = HRTIM_TIMDEADTIME_PRESCALERRATIO_MUL8;
-  pDeadTimeCfg.RisingValue = 70;
+  pDeadTimeCfg.RisingValue = 90;
   pDeadTimeCfg.RisingSign = HRTIM_TIMDEADTIME_RISINGSIGN_POSITIVE;
   pDeadTimeCfg.RisingLock = HRTIM_TIMDEADTIME_RISINGLOCK_WRITE;
   pDeadTimeCfg.RisingSignLock = HRTIM_TIMDEADTIME_RISINGSIGNLOCK_WRITE;
-  pDeadTimeCfg.FallingValue = 70;
+  pDeadTimeCfg.FallingValue = 90;
   pDeadTimeCfg.FallingSign = HRTIM_TIMDEADTIME_FALLINGSIGN_POSITIVE;
   pDeadTimeCfg.FallingLock = HRTIM_TIMDEADTIME_FALLINGLOCK_WRITE;
   pDeadTimeCfg.FallingSignLock = HRTIM_TIMDEADTIME_FALLINGSIGNLOCK_WRITE;
@@ -589,6 +619,8 @@ static void MX_HRTIM1_Init(void)
   {
     Error_Handler();
   }
+  pDeadTimeCfg.RisingValue = 70;
+  pDeadTimeCfg.FallingValue = 70;
   if (HAL_HRTIM_DeadTimeConfig(&hhrtim1, HRTIM_TIMERINDEX_TIMER_B, &pDeadTimeCfg) != HAL_OK)
   {
     Error_Handler();
@@ -786,6 +818,12 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+/**
+  * @brief ADC Callback, runs the Vbus voltage control
+  * @param hadc: ADC Handler
+  * @retval None
+  */
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 {
    if(hadc == &hadc1)
@@ -796,10 +834,26 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 	   float IBAT_F = (float)AD_RES_BUFFER[0];
 	   float IBUS_F = (float)AD_RES_BUFFER[2];
 
-	   meas.Vbat = VBAT_F/4096 * 5 * Vref; // RAW/2^12 * 3.3 * 5
-	   meas.Vbus = VBUS_F/4096 * 11 * Vref; // RAW/2^12 * 3.3 * 11
-	   meas.Ibat = ((IBAT_F/4096 * Vref) - Vref1)*2; // ((RAW/2^12 * 3.3) - 1.67) / (0.005 * 100)
-	   meas.Ibus = ((IBUS_F/4096 * Vref) - Vref2)*2; // ((RAW/2^12 * 3.3) - 1.67) / (0.005 * 100)
+	   meas.Vbat = VBAT_F/4096 * 5 * 3.3; // RAW/2^12 * 3.3 * 5
+	   meas.Vbus = VBUS_F/4096 * 11 * 3.3; // RAW/2^12 * 3.3 * 11
+	   if(Vref1 == 0)
+	   {
+		   meas.Ibat = 0;
+	   }
+	   else
+	   {
+		   meas.Ibat = ((IBAT_F/4096 * 3.3) - Vref1)*2; // ((RAW/2^12 * 3.3) - 1.67) / (0.005 * 100)
+	   }
+
+	   if(Vref2 == 0)
+	   {
+		   meas.Ibus = 0;
+	   }
+	   else
+	   {
+		   meas.Ibus = ((IBUS_F/4096 * 3.3) - Vref2)*2; // ((RAW/2^12 * 3.3) - 1.67) / (0.005 * 100)
+	   }
+
 
 		if(meas.Vbat > VBAT_MAX || meas.Vbat < VBAT_MIN ||\
 				meas.Ibat > IBAT_MAX ||\
@@ -810,10 +864,16 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 		}
 		else
 		{
-			float phase_f = PID_Step(&pid, meas.Vbus, VBUS_SETPOINT);
-			int phase_i = (int) phase_f;
+			phase_f = PID_Step(&pid, meas.Vbus, Vbus_Setpoint);
+			phase_i = (int) phase_f;
+			if(currentState == DISCHARGING)
+			{
 			__HAL_HRTIM_SETCOMPARE( &hhrtim1, HRTIM_TIMERINDEX_MASTER, HRTIM_COMPAREUNIT_2, 8320 + phase_i);
-
+			}
+			else if(currentState == CHARGING)
+			{
+				__HAL_HRTIM_SETCOMPARE( &hhrtim1, HRTIM_TIMERINDEX_MASTER, HRTIM_COMPAREUNIT_2, 8320 - phase_i);
+			}
 		}
 
    }
@@ -821,11 +881,16 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
    {
 	   float VREF1_F = (float)AD_RES_REF[0];
 	   float VREF2_F = (float)AD_RES_REF[1];
-	   Vref1 = VREF1_F/4096 * Vref;
-	   Vref2 = VREF2_F/4096 * Vref;
+	   Vref1 = VREF1_F/4096 * 3.3;
+	   Vref2 = VREF2_F/4096 * 3.3;
    }
 }
 
+/**
+  * @brief Function used to change the state of FSM
+  * @param newState: New state
+  * @retval None
+  */
 void changeState(States newState)
 {
 	if(newState == currentState){
@@ -840,15 +905,17 @@ void changeState(States newState)
 	  case IDLE:
 		  break;
 	  case RAMP:
-		  enterRamp();
+		  /* Start HRTIM counter and enable PWMs*/
+		  HAL_HRTIM_WaveformCountStart(&hhrtim1,HRTIM_TIMERID_MASTER|HRTIM_TIMERID_TIMER_A|HRTIM_TIMERID_TIMER_B);
+		  HAL_HRTIM_WaveformOutputStart(&hhrtim1, HRTIM_OUTPUT_TA1 | HRTIM_OUTPUT_TA2|HRTIM_OUTPUT_TB1 | HRTIM_OUTPUT_TB2);
 		  break;
 	  case CHARGING:
-		  enterCharging();
 		  break;
 	  case DISCHARGING:
-		  enterDischarging();
 		  break;
 	  case ERROR_PPC:
+		  HAL_HRTIM_WaveformCountStop(&hhrtim1, HRTIM_TIMERID_MASTER|HRTIM_TIMERID_TIMER_A|HRTIM_TIMERID_TIMER_B);
+		  HAL_TIM_Base_Stop(&htim2);
 		  Error_PPC();
 		  break;
 	  default:
@@ -856,27 +923,106 @@ void changeState(States newState)
 	}
 }
 
-void enterRamp()
+/**
+  * @brief FDCAN callback, used for retrieve VBUS setpoint from master and send Vbat values for balancing control
+  * @param hfdcan: FDCAN handler
+  * @param RxFifo0ITs:
+  * @retval None
+  */
+void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
 {
+	if((RxFifo0ITs & FDCAN_IT_RX_FIFO0_NEW_MESSAGE) != RESET)
+	{
+		/* Retreive Rx messages from RX FIFO1 */
+		if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &RxHeader, RxData) != HAL_OK)
+		{
+			/* Reception Error */
+			Error_Handler();
+		}
 
+		if(RxHeader.RxFrameType == FDCAN_REMOTE_FRAME) //Master request Vbat value
+		{
+			FloatBytes data;
+			data.f = meas.Vbat;
+			TxData[0] = data.b[0];
+			TxData[1] = data.b[1];
+			TxData[2] = data.b[2];
+			TxData[3] = data.b[3];
+			if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan2, &TxHeader, TxData)!= HAL_OK)
+			{
+				Error_Handler();
+			}
+		}
+		else if(RxHeader.RxFrameType == FDCAN_DATA_FRAME) //Master sends a new Vbus setpoint
+		{
+			FloatBytes data;
+			data.b[0] = RxData[0];
+			data.b[1] = RxData[1];
+			data.b[2] = RxData[2];
+			data.b[3] = RxData[3];
+			Vbus_Setpoint = data.f;
+		}
+
+	}
 }
 
-void enterCharging()
+/**
+  * @brief Function to configure the FDCAN communication
+  * @param None
+  * @retval None
+  */
+static void FDCAN_Config()
 {
+	FDCAN_FilterTypeDef sFilterConfig;
 
+	sFilterConfig.IdType = FDCAN_STANDARD_ID;
+	sFilterConfig.FilterIndex = 0;
+	sFilterConfig.FilterType = FDCAN_FILTER_DUAL;
+	sFilterConfig.FilterConfig = FDCAN_FILTER_TO_RXFIFO0;
+	sFilterConfig.FilterID1 = 0x01;
+	sFilterConfig.FilterID2 = 0x02;
+	if (HAL_FDCAN_ConfigFilter(&hfdcan2, &sFilterConfig) != HAL_OK)
+	{
+	  /* Filter configuration Error */
+	  Error_Handler();
+	}
+
+	if(HAL_FDCAN_Start(&hfdcan2)!= HAL_OK)
+	{
+	 Error_Handler();
+	}
+
+	if (HAL_FDCAN_ActivateNotification(&hfdcan2, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0) != HAL_OK)
+	{
+		Error_Handler();
+	}
+
+	// Configure TX Header for FDCAN1
+	TxHeader.Identifier = 0x10;
+	TxHeader.IdType = FDCAN_STANDARD_ID;
+	TxHeader.TxFrameType = FDCAN_DATA_FRAME;
+	TxHeader.DataLength = FDCAN_DLC_BYTES_4;
+	TxHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
+	TxHeader.BitRateSwitch = FDCAN_BRS_OFF;
+	TxHeader.FDFormat = FDCAN_CLASSIC_CAN;
+	TxHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
+	TxHeader.MessageMarker = 0;
 }
 
-void enterDischarging()
-{
-
-}
-
+/**
+  * @brief Error function to indicate that an error happened during functioning
+  * @param None
+  * @retval None
+  */
 void Error_PPC()
 {
 	while(1)
 	{
 		HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
-		HAL_Delay(300);
+		// Delay simples sem interrupção (~300ms dependendo do clock)
+		for(volatile uint32_t i = 0; i < 1000000; i++) {
+			__NOP();
+		}
 	}
 }
 
