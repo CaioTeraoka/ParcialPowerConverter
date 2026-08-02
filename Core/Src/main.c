@@ -100,7 +100,7 @@ float Vbus_Setpoint = 18;
 int vbatStable =  0;
 
 Measures meas;
-PID pid = {100, 500, 0, 0, 0, 0.0001, MAX_PHASE, MIN_PHASE, 0, 0, 0, 0, 0};
+PID pid = {300, 600, 0, 0, 0, 0.0001, MAX_PHASE, MIN_PHASE, 0, 0, 0, 0, 0};
 
 static States currentState = IDLE;
 
@@ -216,7 +216,7 @@ int main(void)
 	  		  }
 	  		  break;
 	  	  case RAMP:
-	  		  if(Vbus_Setpoint < 28)
+	  		  if(/*Vbus_Setpoint < 28*/0)
 	  		  {
 	  			Vbus_Setpoint += 0.1;
 	  		  }
@@ -985,6 +985,16 @@ static void FDCAN_Config()
 	{
 	  /* Filter configuration Error */
 	  Error_Handler();
+	}
+
+	if (HAL_FDCAN_ConfigGlobalFilter(&hfdcan2,
+									  FDCAN_FILTER_REMOTE,      // NonMatchingStd: Rejeita Standard IDs que não casarem
+									  FDCAN_FILTER_REMOTE,      // NonMatchingExt: Rejeita Extended IDs que não casarem
+									  FDCAN_FILTER_REMOTE, // Rejeita ou aceita Remote Frames STD
+									  FDCAN_FILTER_REMOTE) // Rejeita ou aceita Remote Frames EXT
+		!= HAL_OK)
+	{
+		Error_Handler();
 	}
 
 	if(HAL_FDCAN_Start(&hfdcan2)!= HAL_OK)
