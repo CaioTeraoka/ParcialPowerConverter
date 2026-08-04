@@ -1,4 +1,4 @@
-../Core/Src/main.c:142:5:main	7
+../Core/Src/main.c:142:5:main	5
 ../Core/Src/main.c:248:6:SystemClock_Config	3
 ../Core/Src/main.c:295:13:MX_ADC1_Init	8
 ../Core/Src/main.c:399:13:MX_ADC2_Init	4
@@ -9,8 +9,8 @@
 ../Core/Src/main.c:766:13:MX_DMA_Init	1
 ../Core/Src/main.c:788:13:MX_GPIO_Init	1
 ../Core/Src/main.c:827:6:HAL_ADC_ConvCpltCallback	12
-../Core/Src/main.c:894:6:changeState	4
-../Core/Src/main.c:932:6:HAL_FDCAN_RxFifo0Callback	6
-../Core/Src/main.c:974:13:FDCAN_Config	5
-../Core/Src/main.c:1027:6:Error_PPC	2
-../Core/Src/main.c:1045:6:Error_Handler	1
+../Core/Src/main.c:898:6:changeState	4
+../Core/Src/main.c:936:6:HAL_FDCAN_RxFifo0Callback	6
+../Core/Src/main.c:978:13:FDCAN_Config	5
+../Core/Src/main.c:1031:6:Error_PPC	2
+../Core/Src/main.c:1049:6:Error_Handler	1

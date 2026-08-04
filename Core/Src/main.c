@@ -95,12 +95,12 @@ float Vref = 0;
 float Vref1 = 0;
 float Vref2 = 0;
 float phase_f;
-int phase_i;
+int phase_i = 0;
 float Vbus_Setpoint = 18;
 int vbatStable =  0;
 
 Measures meas;
-PID pid = {300, 600, 0, 0, 0, 0.0001, MAX_PHASE, MIN_PHASE, 0, 0, 0, 0, 0};
+PID pid = {2000, 30000, 0, 0, 0, 0.0001, MAX_PHASE, MIN_PHASE, 0, 0, 0, 0, 0};
 
 static States currentState = IDLE;
 
@@ -216,7 +216,7 @@ int main(void)
 	  		  }
 	  		  break;
 	  	  case RAMP:
-	  		  if(/*Vbus_Setpoint < 28*/0)
+	  		  /*if(Vbus_Setpoint < 28)
 	  		  {
 	  			Vbus_Setpoint += 0.1;
 	  		  }
@@ -224,7 +224,7 @@ int main(void)
 	  		  {
 	  			  if(meas.Ibat < 0) changeState(DISCHARGING);
 	  			  else changeState(CHARGING);
-	  		  }
+	  		  }*/
 	  		  break;
 	  	  case CHARGING:
 	  		  break;
@@ -341,7 +341,7 @@ static void MX_ADC1_Init(void)
   */
   sConfig.Channel = ADC_CHANNEL_1;
   sConfig.Rank = ADC_REGULAR_RANK_1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_247CYCLES_5;
+  sConfig.SamplingTime = ADC_SAMPLETIME_47CYCLES_5;
   sConfig.SingleDiff = ADC_SINGLE_ENDED;
   sConfig.OffsetNumber = ADC_OFFSET_NONE;
   sConfig.Offset = 0;
@@ -688,7 +688,7 @@ static void MX_TIM2_Init(void)
   htim2.Instance = TIM2;
   htim2.Init.Prescaler = 0;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 104000;
+  htim2.Init.Period = 10400;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
@@ -828,6 +828,7 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 {
    if(hadc == &hadc1)
    {
+	   //HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
 	   Vref = 3.3*Vref_CAL/AD_RES_BUFFER[4];
 	   float VBAT_F = (float)AD_RES_BUFFER[1];
 	   float VBUS_F = (float)AD_RES_BUFFER[3];
@@ -860,21 +861,24 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 				meas.Vbus > VBUS_MAX ||\
 				meas.Ibus > IBUS_MAX)
 		{
-			changeState(ERROR_PPC);
+			//changeState(ERROR_PPC);
 		}
 		else
 		{
-			phase_f = PID_Step(&pid, meas.Vbus, Vbus_Setpoint);
-			phase_i = (int) phase_f;
 			if(currentState == DISCHARGING)
 			{
-			__HAL_HRTIM_SETCOMPARE( &hhrtim1, HRTIM_TIMERINDEX_MASTER, HRTIM_COMPAREUNIT_2, 8320 + phase_i);
+				phase_f = PID_Step(&pid, meas.Vbus, Vbus_Setpoint);
+				phase_i = (int) phase_f;
+				__HAL_HRTIM_SETCOMPARE( &hhrtim1, HRTIM_TIMERINDEX_MASTER, HRTIM_COMPAREUNIT_2, 8320 + phase_i);
 			}
 			else if(currentState == CHARGING)
 			{
+				phase_f = PID_Step(&pid, meas.Vbus, Vbus_Setpoint);
+				phase_i = (int) phase_f;
 				__HAL_HRTIM_SETCOMPARE( &hhrtim1, HRTIM_TIMERINDEX_MASTER, HRTIM_COMPAREUNIT_2, 8320 - phase_i);
 			}
 		}
+		//HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
 
    }
    else if (hadc == &hadc2)
