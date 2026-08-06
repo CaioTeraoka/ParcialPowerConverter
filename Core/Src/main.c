@@ -96,7 +96,7 @@ float Vref1 = 0;
 float Vref2 = 0;
 float phase_f;
 int phase_i = 0;
-float Vbus_Setpoint = 18;
+float Vbus_Setpoint = 22;
 int vbatStable =  0;
 
 Measures meas;
@@ -173,9 +173,6 @@ int main(void)
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
 
-  	//Initiate FDCAN communication
-	FDCAN_Config();
-
 	//Start TIM2 that will trigger ADC
 	HAL_TIM_Base_Start(&htim2);
 
@@ -210,13 +207,13 @@ int main(void)
 	  		  {
 	  			  ++vbatStable;
 	  		  }
-	  		  if(vbatStable >= 25)
+	  		  if(vbatStable >= 60)
 	  		  {
 	  			  changeState(RAMP);
 	  		  }
 	  		  break;
 	  	  case RAMP:
-	  		  /*if(Vbus_Setpoint < 28)
+	  		  if(Vbus_Setpoint < 24)
 	  		  {
 	  			Vbus_Setpoint += 0.1;
 	  		  }
@@ -224,7 +221,7 @@ int main(void)
 	  		  {
 	  			  if(meas.Ibat < 0) changeState(DISCHARGING);
 	  			  else changeState(CHARGING);
-	  		  }*/
+	  		  }
 	  		  break;
 	  	  case CHARGING:
 	  		  break;
@@ -861,21 +858,23 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 				meas.Vbus > VBUS_MAX ||\
 				meas.Ibus > IBUS_MAX)
 		{
-			//changeState(ERROR_PPC);
+			changeState(ERROR_PPC);
 		}
 		else
 		{
-			if(currentState == DISCHARGING)
+			if(currentState != IDLE)
 			{
 				phase_f = PID_Step(&pid, meas.Vbus, Vbus_Setpoint);
 				phase_i = (int) phase_f;
-				__HAL_HRTIM_SETCOMPARE( &hhrtim1, HRTIM_TIMERINDEX_MASTER, HRTIM_COMPAREUNIT_2, 8320 + phase_i);
-			}
-			else if(currentState == CHARGING)
-			{
-				phase_f = PID_Step(&pid, meas.Vbus, Vbus_Setpoint);
-				phase_i = (int) phase_f;
-				__HAL_HRTIM_SETCOMPARE( &hhrtim1, HRTIM_TIMERINDEX_MASTER, HRTIM_COMPAREUNIT_2, 8320 - phase_i);
+
+				if(currentState == CHARGING)
+				{
+					__HAL_HRTIM_SETCOMPARE( &hhrtim1, HRTIM_TIMERINDEX_MASTER, HRTIM_COMPAREUNIT_2, 8320 - phase_i);
+				}
+				else
+				{
+					__HAL_HRTIM_SETCOMPARE( &hhrtim1, HRTIM_TIMERINDEX_MASTER, HRTIM_COMPAREUNIT_2, 8320 + phase_i);
+				}
 			}
 		}
 		//HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
@@ -909,6 +908,8 @@ void changeState(States newState)
 	  case IDLE:
 		  break;
 	  case RAMP:
+		  //Initiate FDCAN communication
+		  FDCAN_Config();
 		  /* Start HRTIM counter and enable PWMs*/
 		  HAL_HRTIM_WaveformCountStart(&hhrtim1,HRTIM_TIMERID_MASTER|HRTIM_TIMERID_TIMER_A|HRTIM_TIMERID_TIMER_B);
 		  HAL_HRTIM_WaveformOutputStart(&hhrtim1, HRTIM_OUTPUT_TA1 | HRTIM_OUTPUT_TA2|HRTIM_OUTPUT_TB1 | HRTIM_OUTPUT_TB2);
