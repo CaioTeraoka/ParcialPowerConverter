@@ -43,6 +43,10 @@ typedef struct
 	float Ibat;
 } Measures;
 
+typedef struct {
+    float alpha;
+    float y_prev;
+} Butterworth1stOrder;
 
 typedef union
 {
@@ -100,9 +104,11 @@ float Vbus_Setpoint = 22;
 int vbatStable =  0;
 
 Measures meas;
-PID pid = {2000, 30000, 0, 0, 0, 0.0001, MAX_PHASE, MIN_PHASE, 0, 0, 0, 0, 0};
+PID pid = {1500, 300000, 0, 0, 0, 0.0001, MAX_PHASE, MIN_PHASE, 0, 0, 0, 0, 0};
 
 static States currentState = IDLE;
+Butterworth1stOrder vbat_filter = {0.0591, 12};
+Butterworth1stOrder vbus_filter = {0.0591, 22};
 
 FDCAN_TxHeaderTypeDef   TxHeader;
 FDCAN_RxHeaderTypeDef   RxHeader;
@@ -832,8 +838,14 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 	   float IBAT_F = (float)AD_RES_BUFFER[0];
 	   float IBUS_F = (float)AD_RES_BUFFER[2];
 
+
+
 	   meas.Vbat = VBAT_F/4096 * 5 * 3.3; // RAW/2^12 * 3.3 * 5
+	   meas.Vbat = vbat_filter.alpha * meas.Vbat + (1.0f - vbat_filter.alpha) * vbat_filter.y_prev;
+	   vbat_filter.y_prev = meas.Vbat;
 	   meas.Vbus = VBUS_F/4096 * 11 * 3.3; // RAW/2^12 * 3.3 * 11
+	   meas.Vbus = vbus_filter.alpha * meas.Vbus + (1.0f - vbus_filter.alpha) * vbus_filter.y_prev;
+	   vbus_filter.y_prev = meas.Vbus;
 	   if(Vref1 == 0)
 	   {
 		   meas.Ibat = 0;
