@@ -59,6 +59,9 @@ float PID_Step(PID *pid, float measurement, float setpoint)
         command_sat = command;
     }
 
+    /* Remember saturated command at previous step */
+	pid->command_sat_prev = command_sat;
+
     return command_sat;
 }
 

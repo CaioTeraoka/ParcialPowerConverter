@@ -37,11 +37,11 @@ Idx Name          Size      VMA       LMA       File off  Algn
                   CONTENTS, READONLY, DEBUGGING, OCTETS
  16 .debug_macro  0002b972  00000000  00000000  000302fc  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 17 .debug_line   0001dc91  00000000  00000000  0005bc6e  2**0
+ 17 .debug_line   0001dc94  00000000  00000000  0005bc6e  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 18 .debug_str    00137ff3  00000000  00000000  000798ff  2**0
+ 18 .debug_str    00137ff3  00000000  00000000  00079902  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 19 .comment      00000043  00000000  00000000  001b18f2  2**0
+ 19 .comment      00000043  00000000  00000000  001b18f5  2**0
                   CONTENTS, READONLY
  20 .debug_frame  000073e0  00000000  00000000  001b1938  2**2
                   CONTENTS, READONLY, DEBUGGING, OCTETS
@@ -1182,18 +1182,21 @@ float PID_Step(PID *pid, float measurement, float setpoint)
  8000ea4:	61fb      	str	r3, [r7, #28]
     }
 
+    /* Remember saturated command at previous step */
+	pid->command_sat_prev = command_sat;
+ 8000ea6:	68fb      	ldr	r3, [r7, #12]
+ 8000ea8:	69fa      	ldr	r2, [r7, #28]
+ 8000eaa:	631a      	str	r2, [r3, #48]	@ 0x30
+
     return command_sat;
- 8000ea6:	69fb      	ldr	r3, [r7, #28]
- 8000ea8:	ee07 3a90 	vmov	s15, r3
+ 8000eac:	69fb      	ldr	r3, [r7, #28]
+ 8000eae:	ee07 3a90 	vmov	s15, r3
 }
- 8000eac:	eeb0 0a67 	vmov.f32	s0, s15
- 8000eb0:	3724      	adds	r7, #36	@ 0x24
- 8000eb2:	46bd      	mov	sp, r7
- 8000eb4:	f85d 7b04 	ldr.w	r7, [sp], #4
- 8000eb8:	4770      	bx	lr
- 8000eba:	0000      	movs	r0, r0
- 8000ebc:	0000      	movs	r0, r0
-	...
+ 8000eb2:	eeb0 0a67 	vmov.f32	s0, s15
+ 8000eb6:	3724      	adds	r7, #36	@ 0x24
+ 8000eb8:	46bd      	mov	sp, r7
+ 8000eba:	f85d 7b04 	ldr.w	r7, [sp], #4
+ 8000ebe:	4770      	bx	lr
 
 08000ec0 <main>:
 /**
