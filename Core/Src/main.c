@@ -62,13 +62,13 @@ typedef union
 #define Vref_CAL *VREFINT_CAL_ADDR
 
 
-const int16_t MAX_PHASE = 8320;
+const int16_t MAX_PHASE = 10000;
 const int16_t MIN_PHASE = -8320;
 
 const float VBAT_MAX = 14;
 const float VBAT_MIN = 10;
 const float IBAT_MAX = 3;
-const float VBUS_MAX = 28.8;
+const float VBUS_MAX = 32;
 const float IBUS_MAX = 3;
 
 /* USER CODE END PD */
