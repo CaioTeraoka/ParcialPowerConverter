@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "PID.h"
+#include <stdlib.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -62,7 +63,7 @@ typedef union
 #define Vref_CAL *VREFINT_CAL_ADDR
 
 
-const int16_t MAX_PHASE = 10000;
+const int16_t MAX_PHASE = 8320;
 const int16_t MIN_PHASE = -8320;
 
 const float VBAT_MAX = 14;
@@ -102,6 +103,9 @@ float phase_f;
 int phase_i = 0;
 float Vbus_Setpoint = 22;
 int vbatStable =  0;
+float Pbat = 0;
+float Pbus = 0;
+float eta = 0;
 
 Measures meas;
 PID pid = {1500, 300000, 0, 0, 0, 0.0001, MAX_PHASE, MIN_PHASE, 0, 0, 0, 0, 0};
@@ -109,6 +113,8 @@ PID pid = {1500, 300000, 0, 0, 0, 0.0001, MAX_PHASE, MIN_PHASE, 0, 0, 0, 0, 0};
 static States currentState = IDLE;
 Butterworth1stOrder vbat_filter = {0.0591, 12};
 Butterworth1stOrder vbus_filter = {0.0591, 22};
+Butterworth1stOrder Pbus_filter = {0.0591, 8};
+Butterworth1stOrder Pbat_filter = {0.0591, 8};
 
 FDCAN_TxHeaderTypeDef   TxHeader;
 FDCAN_RxHeaderTypeDef   RxHeader;
@@ -610,11 +616,11 @@ static void MX_HRTIM1_Init(void)
     Error_Handler();
   }
   pDeadTimeCfg.Prescaler = HRTIM_TIMDEADTIME_PRESCALERRATIO_MUL8;
-  pDeadTimeCfg.RisingValue = 90;
+  pDeadTimeCfg.RisingValue = 150;
   pDeadTimeCfg.RisingSign = HRTIM_TIMDEADTIME_RISINGSIGN_POSITIVE;
   pDeadTimeCfg.RisingLock = HRTIM_TIMDEADTIME_RISINGLOCK_WRITE;
   pDeadTimeCfg.RisingSignLock = HRTIM_TIMDEADTIME_RISINGSIGNLOCK_WRITE;
-  pDeadTimeCfg.FallingValue = 90;
+  pDeadTimeCfg.FallingValue = 150;
   pDeadTimeCfg.FallingSign = HRTIM_TIMDEADTIME_FALLINGSIGN_POSITIVE;
   pDeadTimeCfg.FallingLock = HRTIM_TIMDEADTIME_FALLINGLOCK_WRITE;
   pDeadTimeCfg.FallingSignLock = HRTIM_TIMDEADTIME_FALLINGSIGNLOCK_WRITE;
@@ -622,8 +628,8 @@ static void MX_HRTIM1_Init(void)
   {
     Error_Handler();
   }
-  pDeadTimeCfg.RisingValue = 70;
-  pDeadTimeCfg.FallingValue = 70;
+  pDeadTimeCfg.RisingValue = 150;
+  pDeadTimeCfg.FallingValue = 150;
   if (HAL_HRTIM_DeadTimeConfig(&hhrtim1, HRTIM_TIMERINDEX_TIMER_B, &pDeadTimeCfg) != HAL_OK)
   {
     Error_Handler();
@@ -888,6 +894,13 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 					__HAL_HRTIM_SETCOMPARE( &hhrtim1, HRTIM_TIMERINDEX_MASTER, HRTIM_COMPAREUNIT_2, 8320 + phase_i);
 				}
 			}
+			Pbat = meas.Vbat * fabs(meas.Ibat);
+			Pbat = Pbat_filter.alpha * Pbat + (1.0f - Pbat_filter.alpha) * Pbat_filter.y_prev;
+		    Pbat_filter.y_prev = Pbat;
+			Pbus = meas.Vbus * fabs(meas.Ibus);
+			Pbus = Pbus_filter.alpha * Pbus + (1.0f - Pbus_filter.alpha) * Pbus_filter.y_prev;
+			Pbus_filter.y_prev = Pbus;
+			eta = Pbus/Pbat;
 		}
 		//HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
 
