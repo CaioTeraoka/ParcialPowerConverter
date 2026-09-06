@@ -30,6 +30,7 @@
 typedef enum
 {
 	IDLE,
+	STABLE,
 	RAMP,
 	CHARGING,
 	DISCHARGING,
@@ -63,13 +64,13 @@ typedef union
 #define Vref_CAL *VREFINT_CAL_ADDR
 
 
-const int16_t MAX_PHASE = 8320;
-const int16_t MIN_PHASE = -8320;
+const int16_t MAX_PHASE = 8300;
+const int16_t MIN_PHASE = -8300;
 
 const float VBAT_MAX = 14;
 const float VBAT_MIN = 10;
 const float IBAT_MAX = 3;
-const float VBUS_MAX = 32;
+const float VBUS_MAX = 29;
 const float IBUS_MAX = 3;
 
 /* USER CODE END PD */
@@ -103,18 +104,24 @@ float phase_f;
 int phase_i = 0;
 float Vbus_Setpoint = 22;
 int vbatStable =  0;
+int vbusStable =  0;
 float Pbat = 0;
 float Pbus = 0;
 float eta = 0;
+float Ppri = 0;
+float Psec = 0;
+float eta_conv = 0;
 
 Measures meas;
-PID pid = {1500, 300000, 0, 0, 0, 0.0001, MAX_PHASE, MIN_PHASE, 0, 0, 0, 0, 0};
+PID pid = {500, 50000, 0, 0, 0, 0.0001, MAX_PHASE, MIN_PHASE, 0, 0, 0, 0, 0};
 
 static States currentState = IDLE;
 Butterworth1stOrder vbat_filter = {0.0591, 12};
 Butterworth1stOrder vbus_filter = {0.0591, 22};
 Butterworth1stOrder Pbus_filter = {0.0591, 8};
 Butterworth1stOrder Pbat_filter = {0.0591, 8};
+Butterworth1stOrder Ppri_filter = {0.0591, 8};
+Butterworth1stOrder Psec_filter = {0.0591, 8};
 
 FDCAN_TxHeaderTypeDef   TxHeader;
 FDCAN_RxHeaderTypeDef   RxHeader;
@@ -219,11 +226,22 @@ int main(void)
 	  		  {
 	  			  ++vbatStable;
 	  		  }
-	  		  if(vbatStable >= 60)
+	  		  if(vbatStable >= 30)
 	  		  {
-	  			  changeState(RAMP);
+	  			  changeState(STABLE);
 	  		  }
 	  		  break;
+
+	  	  case STABLE:
+				  if(meas.Vbus < VBUS_MAX && meas.Vbus > meas.Vbat)
+				  {
+					  ++vbusStable;
+				  }
+				  if(vbusStable >= 30)
+				  {
+					  changeState(RAMP);
+				  }
+				  break;
 	  	  case RAMP:
 	  		  if(Vbus_Setpoint < 24)
 	  		  {
@@ -236,8 +254,10 @@ int main(void)
 	  		  }
 	  		  break;
 	  	  case CHARGING:
+	  		if(meas.Ibat < 0) changeState(DISCHARGING);
 	  		  break;
 	  	  case DISCHARGING:
+	  		if(meas.Ibat > 0) changeState(CHARGING);
 	  		  break;
 	  	  default:
 	  		  break;
@@ -880,7 +900,7 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 		}
 		else
 		{
-			if(currentState != IDLE)
+			if((currentState != IDLE) && (currentState != STABLE))
 			{
 				phase_f = PID_Step(&pid, meas.Vbus, Vbus_Setpoint);
 				phase_i = (int) phase_f;
@@ -894,13 +914,23 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 					__HAL_HRTIM_SETCOMPARE( &hhrtim1, HRTIM_TIMERINDEX_MASTER, HRTIM_COMPAREUNIT_2, 8320 + phase_i);
 				}
 			}
-			Pbat = meas.Vbat * fabs(meas.Ibat);
+			float Ibat_mod = fabs(meas.Ibat);
+			float Ibus_mod = fabs(meas.Ibus);
+			Pbat = meas.Vbat * Ibat_mod;
 			Pbat = Pbat_filter.alpha * Pbat + (1.0f - Pbat_filter.alpha) * Pbat_filter.y_prev;
 		    Pbat_filter.y_prev = Pbat;
-			Pbus = meas.Vbus * fabs(meas.Ibus);
+			Pbus = meas.Vbus * Ibus_mod;
 			Pbus = Pbus_filter.alpha * Pbus + (1.0f - Pbus_filter.alpha) * Pbus_filter.y_prev;
 			Pbus_filter.y_prev = Pbus;
 			eta = Pbus/Pbat;
+
+			Ppri = meas.Vbat * (Ibat_mod - Ibus_mod);
+			Ppri = Ppri_filter.alpha * Ppri + (1.0f - Ppri_filter.alpha) * Ppri_filter.y_prev;
+			Ppri_filter.y_prev = Ppri;
+			Psec = (meas.Vbus - meas.Vbat) * Ibus_mod;
+			Psec = Psec_filter.alpha * Psec + (1.0f - Psec_filter.alpha) * Psec_filter.y_prev;
+			Psec_filter.y_prev = Psec;
+			eta_conv = Psec/Ppri;
 		}
 		//HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
 
@@ -932,12 +962,14 @@ void changeState(States newState)
 	{
 	  case IDLE:
 		  break;
-	  case RAMP:
-		  //Initiate FDCAN communication
-		  FDCAN_Config();
+	  case STABLE:
 		  /* Start HRTIM counter and enable PWMs*/
 		  HAL_HRTIM_WaveformCountStart(&hhrtim1,HRTIM_TIMERID_MASTER|HRTIM_TIMERID_TIMER_A|HRTIM_TIMERID_TIMER_B);
 		  HAL_HRTIM_WaveformOutputStart(&hhrtim1, HRTIM_OUTPUT_TA1 | HRTIM_OUTPUT_TA2|HRTIM_OUTPUT_TB1 | HRTIM_OUTPUT_TB2);
+		  break;
+	  case RAMP:
+		  //Initiate FDCAN communication
+		  FDCAN_Config();
 		  break;
 	  case CHARGING:
 		  break;
